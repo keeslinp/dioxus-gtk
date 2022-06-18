@@ -1,19 +1,34 @@
-use bumpalo::boxed::Box as BumpBox;
 use bumpalo::collections::Vec as BumpVec;
 use dioxus::prelude::*;
-use dioxus_core::{exports::bumpalo, prelude::*, IntoVNode, Mutations};
+use dioxus_core::{exports::bumpalo, IntoVNode, Mutations};
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, Label, Widget};
 use snafu::Whatever;
 use std::collections::HashMap;
 
 struct Renderer {
-    widgets: HashMap<u64, Widget>,
+    widgets: HashMap<u64, NativeWidget>,
 }
 
 #[derive(Props)]
 pub struct ViewProps<'a> {
     children: Element<'a>,
+}
+
+enum NativeWidget {
+    View { widget: gtk::Box },
+    Text { widget: Label },
+    Window { widget: ApplicationWindow },
+}
+
+impl NativeWidget {
+    fn upcast(&self) -> Widget {
+        match self {
+            NativeWidget::View { widget } => widget.clone().upcast::<Widget>(),
+            NativeWidget::Text { widget } => widget.clone().upcast::<Widget>(),
+            NativeWidget::Window { widget } => widget.clone().upcast::<Widget>(),
+        }
+    }
 }
 
 pub fn View<'a>(cx: Scope<'a, ViewProps<'a>>) -> Element {
@@ -49,22 +64,16 @@ impl Renderer {
                     } else {
                         0 // Fallback to the toplevel window
                     };
-                    let target_widget = self.widgets[&target_id].clone();
+                    let target_widget = &self.widgets[&target_id];
                     for _ in 0..many {
                         let child_id = stack.pop().unwrap();
-                        let child = self.widgets[&child_id].clone();
-                        match target_widget.widget_name().as_str() {
-                            "GtkBox" => target_widget
-                                .clone()
-                                .downcast::<gtk::Box>()
-                                .unwrap()
-                                .append(&child),
-                            "GtkApplicationWindow" => target_widget
-                                .clone()
-                                .downcast::<ApplicationWindow>()
-                                .unwrap()
-                                .set_child(Some(&child)),
-                            name => todo!("Don't know how to add children to {}", name),
+                        let child_widget = self.widgets[&child_id].upcast();
+                        match target_widget {
+                            NativeWidget::View { widget } => widget.append(&child_widget),
+                            NativeWidget::Window { widget } => {
+                                widget.set_child(Some(&child_widget))
+                            }
+                            NativeWidget::Text { widget } => unimplemented!(),
                         }
                     }
                 }
@@ -77,8 +86,12 @@ impl Renderer {
                     self.widgets.insert(
                         root,
                         match tag {
-                            "gtk_box" => gtk::Box::default().upcast::<Widget>(),
-                            "gtk_label" => Label::default().upcast::<Widget>(),
+                            "gtk_box" => NativeWidget::View {
+                                widget: gtk::Box::default(),
+                            },
+                            "gtk_label" => NativeWidget::Text {
+                                widget: Label::default(),
+                            },
                             _ => todo!("Have not built tag {} yet", tag),
                         },
                     );
@@ -98,12 +111,10 @@ impl Renderer {
                     field,
                     value,
                     ns,
-                } => match (self.widgets[&root].widget_name().as_str(), field) {
-                    ("GtkLabel", "text") => self.widgets[&root]
-                        .clone()
-                        .downcast::<Label>()
-                        .unwrap()
-                        .set_text(value),
+                } => match (&self.widgets[&root], field) {
+                    (NativeWidget::Text { widget }, "text") => {
+                        widget.set_text(value);
+                    }
                     _ => todo!(),
                 },
                 dioxus_core::DomEdit::RemoveAttribute { root, name, ns } => todo!(),
@@ -128,7 +139,7 @@ pub fn launch(c: Component, application_id: &str) -> Result<(), Whatever> {
         window.present();
 
         let mut widgets = HashMap::new();
-        widgets.insert(0, window.upcast::<Widget>());
+        widgets.insert(0, NativeWidget::Window { widget: window });
         let mut renderer = Renderer { widgets };
         let mut dom = VirtualDom::new(c);
         let mutations = dom.rebuild();
