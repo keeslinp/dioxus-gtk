@@ -1,0 +1,16 @@
+[package]
+name = "gtk-platform"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dioxus-core = "0.2.1"
+futures = "0.3.21"
+gtk = { version= "0.4.8", package="gtk4"}
+snafu = "0.7.1"
+tokio = { version = "1.15.0", features = ["full"] }
+dioxus = "0.2.4"
+
+[dev-dependencies]
