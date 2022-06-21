@@ -12,5 +12,8 @@ gtk = { version= "0.4.8", package="gtk4"}
 snafu = "0.7.1"
 tokio = { version = "1.15.0", features = ["full"] }
 dioxus = "0.2.4"
+taffy = "0.1.0"
+hashbrown = "0.12.1"
+slotmap = "1.0.6"
 
 [dev-dependencies]

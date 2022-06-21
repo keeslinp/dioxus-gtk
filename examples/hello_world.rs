@@ -1,11 +1,14 @@
 use dioxus::prelude::*;
-use gtk_platform::{launch, Text, View};
+use gtk_platform::{launch, Text, View, Window};
 use snafu::Whatever;
 
 fn app(cx: Scope) -> Element {
-    cx.render(rsx!(View {
-        Text {
-            label: "Hello World!"
+    cx.render(rsx!(Window {
+        title: "Hello World",
+        View {
+            Text {
+                label: "Hello World!"
+            }
         }
     }))
 }
