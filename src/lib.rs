@@ -1,5 +1,6 @@
 use bumpalo::collections::Vec as BumpVec;
 use dioxus::prelude::*;
+use dioxus_core::Attribute;
 use dioxus_core::{exports::bumpalo, IntoVNode, Mutations};
 use futures::{select, FutureExt, StreamExt};
 use gtk::glib::{clone, timeout_future_seconds, MainContext, PRIORITY_LOW};
@@ -25,9 +26,60 @@ struct Renderer {
     app: Application,
 }
 
+pub use taffy::style::{AlignItems, JustifyContent};
+
+#[derive(Default)]
+pub struct LayoutProps {
+    pub justify_content: Option<JustifyContent>,
+    pub align_items: Option<AlignItems>,
+}
+
+impl LayoutProps {
+    fn apply_attrs<'a>(&self, f: &NodeFactory<'a>, attrs: &mut BumpVec<'a, Attribute<'a>>) {
+        if let Some(ref justify_content) = self.justify_content {
+            // TODO: Proper serializing
+            attrs.push(f.attr(
+                "justify_content",
+                format_args!(
+                    "{}",
+                    match justify_content {
+                        JustifyContent::FlexStart => "flex_start",
+                        JustifyContent::FlexEnd => "flex_end",
+                        JustifyContent::Center => "center",
+                        JustifyContent::SpaceBetween => "space_between",
+                        JustifyContent::SpaceAround => "space_around",
+                        JustifyContent::SpaceEvenly => "space_evenly",
+                    }
+                ),
+                None,
+                false,
+            ));
+        }
+        if let Some(ref align_items) = self.align_items {
+            // TODO: Proper serializing
+            attrs.push(f.attr(
+                "align_items",
+                format_args!(
+                    "{}",
+                    match align_items {
+                        AlignItems::FlexStart => "flex_start",
+                        AlignItems::FlexEnd => "flex_end",
+                        AlignItems::Center => "center",
+                        AlignItems::Baseline => "baseline",
+                        AlignItems::Stretch => "stretch",
+                    }
+                ),
+                None,
+                false,
+            ));
+        }
+    }
+}
+
 #[derive(Props)]
 pub struct ViewProps<'a> {
     children: Element<'a>,
+    layout: Option<LayoutProps>,
 }
 
 enum NativeWidget {
@@ -52,7 +104,18 @@ pub fn View<'a>(cx: Scope<'a, ViewProps<'a>>) -> Element {
         if let Some(ref node) = cx.props.children {
             children.push(node.into_vnode(f));
         }
-        f.raw_element("gtk_box", None, &[], &[], children.into_bump_slice(), None)
+        let mut attrs = BumpVec::new_in(f.bump());
+        if let Some(ref layout) = cx.props.layout {
+            layout.apply_attrs(&f, &mut attrs);
+        }
+        f.raw_element(
+            "gtk_box",
+            None,
+            &[],
+            attrs.into_bump_slice(),
+            children.into_bump_slice(),
+            None,
+        )
     }))
 }
 
@@ -62,7 +125,7 @@ pub struct TextProps<'a> {
 }
 pub fn Text<'a>(cx: Scope<'a, TextProps<'a>>) -> Element {
     let nf = NodeFactory::new(&cx);
-    let mut attrs = dioxus::core::exports::bumpalo::collections::Vec::new_in(nf.bump());
+    let mut attrs = BumpVec::new_in(nf.bump());
     attrs.push(nf.attr("text", format_args!("{}", cx.props.label), None, false));
     Some(nf.raw_element("gtk_label", None, &[], attrs.into_bump_slice(), &[], None))
 }
@@ -71,6 +134,7 @@ pub fn Text<'a>(cx: Scope<'a, TextProps<'a>>) -> Element {
 pub struct WindowProps<'a> {
     title: &'a str,
     children: Element<'a>,
+    layout: Option<LayoutProps>,
 }
 
 pub fn Window<'a>(cx: Scope<'a, WindowProps<'a>>) -> Element {
@@ -81,6 +145,9 @@ pub fn Window<'a>(cx: Scope<'a, WindowProps<'a>>) -> Element {
         }
         let mut attrs = dioxus::core::exports::bumpalo::collections::Vec::new_in(f.bump());
         attrs.push(f.attr("title", format_args!("{}", cx.props.title), None, false));
+        if let Some(ref layout) = cx.props.layout {
+            layout.apply_attrs(&f, &mut attrs);
+        }
         f.raw_element(
             "gtk_window",
             None,
@@ -153,17 +220,7 @@ impl Renderer {
                                 .gtk
                                 .insert(key, NativeWidget::View(gtk::Box::default()));
 
-                            let taffy_node = self
-                                .taffy
-                                .new_node(
-                                    Style {
-                                        justify_content: JustifyContent::Center,
-                                        align_items: AlignItems::Center,
-                                        ..Default::default()
-                                    },
-                                    &[],
-                                )
-                                .unwrap();
+                            let taffy_node = self.taffy.new_node(Default::default(), &[]).unwrap();
                             self.widgets.taffy.insert(key, taffy_node.clone());
                             self.taffy_nodes.insert(taffy_node, key);
                         }
@@ -192,7 +249,6 @@ impl Renderer {
                                 .taffy
                                 .new_node(
                                     Style {
-                                        justify_content: JustifyContent::Center,
                                         size: Size {
                                             width: Dimension::Percent(1.),
                                             height: Dimension::Percent(1.),
@@ -226,6 +282,60 @@ impl Renderer {
                 } => {
                     let key = self.roots[&root];
                     match (&self.widgets.gtk[key], self.widgets.taffy.get(key), field) {
+                        (_, Some(taffy_node), "justify_content") => {
+                            let current_style = self
+                                .taffy
+                                .style(taffy_node.clone())
+                                .cloned()
+                                .unwrap_or_default();
+                            self.taffy
+                                .set_style(
+                                    *taffy_node,
+                                    Style {
+                                        justify_content: match value {
+                                            "flex_start" => JustifyContent::FlexStart,
+                                            "flex_end" => JustifyContent::FlexEnd,
+                                            "center" => JustifyContent::Center,
+                                            "space_between" => JustifyContent::SpaceBetween,
+                                            "space_around" => JustifyContent::SpaceAround,
+                                            "space_evenly" => JustifyContent::SpaceEvenly,
+                                            val => {
+                                                todo!(
+                                                    "Have not implemented justify_content {}",
+                                                    val
+                                                )
+                                            }
+                                        },
+                                        ..current_style
+                                    },
+                                )
+                                .expect("failed to apply justify_content style");
+                        }
+                        (_, Some(taffy_node), "align_items") => {
+                            let current_style = self
+                                .taffy
+                                .style(taffy_node.clone())
+                                .cloned()
+                                .unwrap_or_default();
+                            self.taffy
+                                .set_style(
+                                    *taffy_node,
+                                    Style {
+                                        align_items: match value {
+                                            "flex_start" => AlignItems::FlexStart,
+                                            "flex_end" => AlignItems::FlexEnd,
+                                            "center" => AlignItems::Center,
+                                            "baseline" => AlignItems::Baseline,
+                                            "stretch" => AlignItems::Stretch,
+                                            val => {
+                                                todo!("Have not implemented align_items {}", val)
+                                            }
+                                        },
+                                        ..current_style
+                                    },
+                                )
+                                .expect("failed to apply justify_content style");
+                        }
                         (NativeWidget::Text(ref widget), Some(taffy_node), "text") => {
                             widget.set_text(value);
                             let clone = widget.clone();

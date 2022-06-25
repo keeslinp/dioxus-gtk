@@ -1,11 +1,20 @@
 use dioxus::prelude::*;
-use gtk_platform::{launch, Text, View, Window};
+use gtk_platform::{launch, AlignItems, JustifyContent, LayoutProps, Text, View, Window};
 use snafu::Whatever;
 
 fn app(cx: Scope) -> Element {
     cx.render(rsx!(Window {
         title: "Hello World",
+        layout: LayoutProps {
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        }
         View {
+            layout: LayoutProps {
+                justify_content: Some(JustifyContent::Center),
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            }
             Text {
                 label: "Hello World!"
             }
