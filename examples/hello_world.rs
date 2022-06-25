@@ -16,7 +16,10 @@ fn app(cx: Scope) -> Element {
                 ..Default::default()
             }
             Text {
-                label: "Hello World!"
+                label: "Hello"
+            }
+            Text {
+                label: "World!"
             }
         }
     }))

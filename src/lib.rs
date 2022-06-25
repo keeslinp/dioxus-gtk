@@ -171,8 +171,7 @@ impl Renderer {
                     let target_key = self.roots[&target_root];
                     let target_widget = &self.widgets.gtk[target_key];
                     let target_taffy = self.widgets.taffy[target_key];
-                    for _ in 0..many {
-                        let child_root = stack.pop().unwrap();
+                    for child_root in stack.drain(stack.len() - many as usize..) {
                         let child_key = self.roots[&child_root];
                         let child_widget = &self.widgets.gtk[child_key];
                         let child_taffy = self.widgets.taffy[child_key];
@@ -225,15 +224,20 @@ impl Renderer {
                             self.taffy_nodes.insert(taffy_node, key);
                         }
                         "gtk_label" => {
-                            self.widgets.gtk.insert(
-                                key,
-                                NativeWidget::Text(
-                                    Label::builder().valign(gtk::Align::Start).build(),
-                                ),
-                            );
+                            let label = Label::builder().valign(gtk::Align::Start).build();
+
+                            self.widgets
+                                .gtk
+                                .insert(key, NativeWidget::Text(label.clone()));
                             let taffy_node = self
                                 .taffy
-                                .new_leaf(Default::default(), Raw(|_| Size::zero()))
+                                .new_leaf(
+                                    Default::default(),
+                                    Boxed(Box::new(move |_| Size {
+                                        width: label.width() as f32,
+                                        height: label.height() as f32,
+                                    })),
+                                )
                                 .unwrap();
                             self.widgets.taffy.insert(key, taffy_node.clone());
                             self.taffy_nodes.insert(taffy_node, key);
@@ -336,18 +340,8 @@ impl Renderer {
                                 )
                                 .expect("failed to apply justify_content style");
                         }
-                        (NativeWidget::Text(ref widget), Some(taffy_node), "text") => {
+                        (NativeWidget::Text(ref widget), _, "text") => {
                             widget.set_text(value);
-                            let clone = widget.clone();
-                            self.taffy
-                                .set_measure(
-                                    taffy_node.clone(),
-                                    Some(Boxed(Box::new(move |_| Size {
-                                        width: clone.width() as f32,
-                                        height: clone.height() as f32,
-                                    }))),
-                                )
-                                .unwrap();
                         }
                         (NativeWidget::Window(widget), _, "title") => {
                             widget.set_title(Some(value));
