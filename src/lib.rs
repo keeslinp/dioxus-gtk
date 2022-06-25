@@ -4,7 +4,7 @@ use dioxus_core::Attribute;
 use dioxus_core::{exports::bumpalo, IntoVNode, Mutations};
 use futures::{select, FutureExt, StreamExt};
 use gtk::glib::{clone, timeout_future_seconds, MainContext, PRIORITY_LOW};
-use gtk::prelude::*;
+use gtk::{prelude::*, Fixed};
 use gtk::{Application, ApplicationWindow, Label, Widget};
 use hashbrown::HashMap;
 use slotmap::{DefaultKey, SecondaryMap, SlotMap};
@@ -15,6 +15,8 @@ use taffy::prelude::*;
 struct Widgets {
     main: SlotMap<DefaultKey, ()>,
     gtk: SecondaryMap<DefaultKey, NativeWidget>,
+    layout_root: SecondaryMap<DefaultKey, Fixed>,
+    layout_parent: SecondaryMap<DefaultKey, DefaultKey>,
     taffy: SecondaryMap<DefaultKey, Node>,
 }
 
@@ -169,29 +171,19 @@ impl Renderer {
                 dioxus_core::DomEdit::AppendChildren { many } if (many as usize) < stack.len() => {
                     let target_root = stack[stack.len() - many as usize - 1];
                     let target_key = self.roots[&target_root];
-                    let target_widget = &self.widgets.gtk[target_key];
                     let target_taffy = self.widgets.taffy[target_key];
+                    let layout_root = self.widgets.layout_root.get(target_key).expect(
+                        "Trying to add a child to a component which does not have a layout root",
+                    );
                     for child_root in stack.drain(stack.len() - many as usize..) {
                         let child_key = self.roots[&child_root];
                         let child_widget = &self.widgets.gtk[child_key];
                         let child_taffy = self.widgets.taffy[child_key];
-                        match target_widget {
-                            NativeWidget::View(widget) => {
-                                widget.append(&child_widget.upcast());
-                                self.taffy
-                                    .add_child(target_taffy.clone(), child_taffy)
-                                    .unwrap();
-                            }
-                            NativeWidget::Window(widget) => {
-                                widget.set_child(Some(&child_widget.upcast()));
-                                self.taffy
-                                    .add_child(target_taffy.clone(), child_taffy)
-                                    .unwrap();
-                            }
-                            NativeWidget::Text(_widget) => {
-                                unimplemented!("Text nodes cannot have children")
-                            }
-                        }
+                        layout_root.put(&child_widget.upcast(), 0., 0.);
+                        self.widgets.layout_parent.insert(child_key, target_key);
+                        self.taffy
+                            .add_child(target_taffy.clone(), child_taffy)
+                            .unwrap();
                     }
                 }
                 dioxus_core::DomEdit::AppendChildren { many } if many == 1 && stack.len() == 1 => {
@@ -215,10 +207,14 @@ impl Renderer {
                     self.roots.insert(root, key);
                     match tag {
                         "gtk_box" => {
+                            let gtk_box = gtk::Box::default();
                             self.widgets
                                 .gtk
-                                .insert(key, NativeWidget::View(gtk::Box::default()));
+                                .insert(key, NativeWidget::View(gtk_box.clone()));
 
+                            let layout_root = Fixed::builder().hexpand(true).vexpand(true).build();
+                            gtk_box.append(&layout_root);
+                            self.widgets.layout_root.insert(key, layout_root);
                             let taffy_node = self.taffy.new_node(Default::default(), &[]).unwrap();
                             self.widgets.taffy.insert(key, taffy_node.clone());
                             self.taffy_nodes.insert(taffy_node, key);
@@ -243,12 +239,14 @@ impl Renderer {
                             self.taffy_nodes.insert(taffy_node, key);
                         }
                         "gtk_window" => {
-                            self.widgets.gtk.insert(
-                                key,
-                                NativeWidget::Window(
-                                    ApplicationWindow::builder().application(&self.app).build(),
-                                ),
-                            );
+                            let window =
+                                ApplicationWindow::builder().application(&self.app).build();
+                            self.widgets
+                                .gtk
+                                .insert(key, NativeWidget::Window(window.clone()));
+                            let layout_root = Fixed::builder().hexpand(true).vexpand(true).build();
+                            window.set_child(Some(&layout_root));
+                            self.widgets.layout_root.insert(key, layout_root);
                             let taffy_node = self
                                 .taffy
                                 .new_node(
@@ -378,15 +376,31 @@ impl Renderer {
         let mut stack = vec![self.roots[&1]];
         while let Some(node) = stack.pop() {
             let taffy_node = self.widgets.taffy[node];
-            let gtk_node = &self.widgets.gtk[node];
             if let Ok(children) = self.taffy.children(taffy_node) {
                 for key in children.iter().map(|child| self.taffy_nodes[&child]) {
                     stack.push(key);
                 }
             }
+            let gtk_node = &self.widgets.gtk[node];
             let layout = self.taffy.layout(taffy_node).unwrap();
-            gtk_node.upcast().set_margin_start(layout.location.x as i32);
-            gtk_node.upcast().set_margin_top(layout.location.y as i32);
+            if let Some(layout_root) = self
+                .widgets
+                .layout_parent
+                .get(node)
+                .and_then(|parent| self.widgets.layout_root.get(*parent))
+            {
+                layout_root.move_(
+                    &gtk_node.upcast(),
+                    layout.location.x as f64,
+                    layout.location.y as f64,
+                );
+            }
+            gtk_node
+                .upcast()
+                .set_width_request(layout.size.width as i32);
+            gtk_node
+                .upcast()
+                .set_height_request(layout.size.height as i32);
         }
     }
 }

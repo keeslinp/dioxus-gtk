@@ -19,7 +19,7 @@ fn app(cx: Scope) -> Element {
                 label: "Hello"
             }
             Text {
-                label: "World!"
+                label: " World!"
             }
         }
     }))
