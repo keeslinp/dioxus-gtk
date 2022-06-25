@@ -1,9 +1,14 @@
-use bumpalo::collections::Vec as BumpVec;
-use dioxus::prelude::*;
-use dioxus_core::Attribute;
-use dioxus_core::{exports::bumpalo, IntoVNode, Mutations};
+use std::sync::Arc;
+
+use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec};
+use dioxus::prelude::Props;
+use dioxus_core::{
+    exports::bumpalo, prelude::*, IntoVNode, Mutations, SchedulerMsg, UiEvent, UserEvent,
+};
+use dioxus_core::{ElementId, EventPriority};
+use futures::channel::mpsc::UnboundedSender;
 use futures::{select, FutureExt, StreamExt};
-use gtk::glib::{clone, timeout_future_seconds, MainContext, PRIORITY_LOW};
+use gtk::glib::{clone, MainContext};
 use gtk::{prelude::*, Fixed};
 use gtk::{Application, ApplicationWindow, Label, Widget};
 use hashbrown::HashMap;
@@ -26,6 +31,7 @@ struct Renderer {
     taffy_nodes: HashMap<Node, DefaultKey>,
     taffy: Taffy,
     app: Application,
+    sender: UnboundedSender<MainEvent>,
 }
 
 pub use taffy::*;
@@ -40,6 +46,7 @@ enum NativeWidget {
     View(gtk::Box),
     Text(Label),
     Window(ApplicationWindow),
+    Button(gtk::Button),
 }
 
 impl NativeWidget {
@@ -48,6 +55,7 @@ impl NativeWidget {
             NativeWidget::View(widget) => widget.clone().upcast::<Widget>(),
             NativeWidget::Text(widget) => widget.clone().upcast::<Widget>(),
             NativeWidget::Window(widget) => widget.clone().upcast::<Widget>(),
+            NativeWidget::Button(widget) => widget.clone().upcast::<Widget>(),
         }
     }
 }
@@ -78,15 +86,75 @@ pub fn View<'a>(cx: Scope<'a, ViewProps<'a>>) -> Element {
     }))
 }
 
-#[derive(Props)]
-pub struct TextProps<'a> {
-    label: &'a str,
+#[derive(Props, PartialEq)]
+pub struct TextProps {
+    label: String,
+    layout: Option<Style>,
 }
-pub fn Text<'a>(cx: Scope<'a, TextProps<'a>>) -> Element {
-    let nf = NodeFactory::new(&cx);
-    let mut attrs = BumpVec::new_in(nf.bump());
-    attrs.push(nf.attr("text", format_args!("{}", cx.props.label), None, false));
-    Some(nf.raw_element("gtk_label", None, &[], attrs.into_bump_slice(), &[], None))
+pub fn Text<'a>(cx: Scope<'a, TextProps>) -> Element {
+    cx.render(LazyNodes::new(move |f| {
+        let mut attrs = BumpVec::new_in(f.bump());
+        attrs.push(f.attr("text", format_args!("{}", cx.props.label), None, false));
+        if let Some(ref layout) = cx.props.layout {
+            attrs.push(f.attr(
+                "layout",
+                format_args!("{}", serde_json::to_string(layout).unwrap()),
+                None,
+                false,
+            ));
+        }
+        f.raw_element("gtk_label", None, &[], attrs.into_bump_slice(), &[], None)
+    }))
+}
+
+// TODO: Add values
+pub struct PressData {}
+
+type PressEvent = UiEvent<PressData>;
+
+#[derive(Props)]
+pub struct ButtonProps<'a> {
+    label: String,
+    layout: Option<Style>,
+    on_press: EventHandler<'a, PressEvent>,
+}
+pub fn Button<'a>(cx: Scope<'a, ButtonProps<'a>>) -> Element {
+    cx.render(LazyNodes::new(move |f| {
+        let bump = &f.bump();
+        let mut attrs = BumpVec::new_in(bump);
+        attrs.push(f.attr("label", format_args!("{}", cx.props.label), None, false));
+        if let Some(ref layout) = cx.props.layout {
+            attrs.push(f.attr(
+                "layout",
+                format_args!("{}", serde_json::to_string(layout).unwrap()),
+                None,
+                false,
+            ));
+        }
+        let mut listeners = BumpVec::new_in(bump);
+
+        use dioxus_core::AnyEvent;
+        // we can't allocate unsized in bumpalo's box, so we need to craft the box manually
+        // safety: this is essentially the same as calling Box::new() but manually
+        // The box is attached to the lifetime of the bumpalo allocator
+        let cb: &mut dyn FnMut(AnyEvent) = bump.alloc(move |evt: AnyEvent| {
+            let event = evt.downcast::<PressData>().unwrap();
+            cx.props.on_press.call(event);
+        });
+
+        let callback: BumpBox<dyn FnMut(AnyEvent) + 'a> = unsafe { BumpBox::from_raw(cb) };
+
+        let handler = bump.alloc(std::cell::RefCell::new(Some(callback)));
+        listeners.push(f.listener("press", handler));
+        f.raw_element(
+            "gtk_button",
+            None,
+            listeners.into_bump_slice(),
+            attrs.into_bump_slice(),
+            &[],
+            None,
+        )
+    }))
 }
 
 #[derive(Props)]
@@ -181,9 +249,26 @@ impl Renderer {
                             self.widgets.taffy.insert(key, taffy_node.clone());
                             self.taffy_nodes.insert(taffy_node, key);
                         }
+                        "gtk_button" => {
+                            let button = gtk::Button::builder().valign(gtk::Align::Start).build();
+                            self.widgets
+                                .gtk
+                                .insert(key, NativeWidget::Button(button.clone()));
+                            let taffy_node = self
+                                .taffy
+                                .new_leaf(
+                                    Default::default(),
+                                    Boxed(Box::new(move |_| Size {
+                                        width: button.width() as f32,
+                                        height: button.height() as f32,
+                                    })),
+                                )
+                                .unwrap();
+                            self.widgets.taffy.insert(key, taffy_node.clone());
+                            self.taffy_nodes.insert(taffy_node, key);
+                        }
                         "gtk_label" => {
                             let label = Label::builder().valign(gtk::Align::Start).build();
-
                             self.widgets
                                 .gtk
                                 .insert(key, NativeWidget::Text(label.clone()));
@@ -235,7 +320,26 @@ impl Renderer {
                     event_name,
                     scope,
                     root,
-                } => todo!(),
+                } => {
+                    let key = self.roots[&root];
+                    match (&self.widgets.gtk[key], event_name) {
+                        (NativeWidget::Button(widget), "press") => {
+                            let sender = self.sender.clone();
+                            widget.connect_clicked(move |_| {
+                                sender
+                                    .unbounded_send(MainEvent::UserEvent(UserEvent {
+                                        scope_id: Some(scope),
+                                        priority: EventPriority::High,
+                                        element: Some(ElementId(root as usize)),
+                                        name: event_name,
+                                        data: Arc::new(PressData {}),
+                                    }))
+                                    .unwrap();
+                            });
+                        }
+                        _ => unimplemented!(),
+                    }
+                }
                 dioxus_core::DomEdit::RemoveEventListener { root, event } => todo!(),
                 dioxus_core::DomEdit::SetText { root, text } => todo!(),
                 dioxus_core::DomEdit::SetAttribute {
@@ -248,16 +352,20 @@ impl Renderer {
                     match (&self.widgets.gtk[key], self.widgets.taffy.get(key), field) {
                         (_, Some(taffy_node), "layout") => {
                             let layout = serde_json::from_str(value).unwrap();
-                            layout;
                             self.taffy
                                 .set_style(*taffy_node, layout)
                                 .expect("failed to apply justify_content style");
                         }
-                        (NativeWidget::Text(ref widget), _, "text") => {
+                        (NativeWidget::Text(ref widget), Some(taffy_node), "text") => {
                             widget.set_text(value);
+                            self.taffy.mark_dirty(*taffy_node).unwrap();
                         }
                         (NativeWidget::Window(widget), _, "title") => {
                             widget.set_title(Some(value));
+                        }
+                        (NativeWidget::Button(widget), Some(taffy_node), "label") => {
+                            widget.set_label(value);
+                            self.taffy.mark_dirty(*taffy_node).unwrap();
                         }
                         _ => todo!(),
                     };
@@ -323,6 +431,7 @@ impl Renderer {
 enum MainEvent {
     Resize,
     Render,
+    UserEvent(UserEvent),
 }
 
 pub fn launch(c: Component, application_id: &str) -> Result<(), Whatever> {
@@ -330,37 +439,45 @@ pub fn launch(c: Component, application_id: &str) -> Result<(), Whatever> {
         .application_id(application_id)
         .build();
     app.connect_activate(move |app: &Application| {
+        let (sender, mut receiver) = futures::channel::mpsc::unbounded::<MainEvent>();
         let mut renderer = Renderer {
             widgets: Widgets::default(),
             taffy: Taffy::new(),
             roots: HashMap::new(),
             taffy_nodes: HashMap::new(),
             app: app.clone(),
+            sender: sender.clone(),
         };
         let mut dom = VirtualDom::new(c);
         let mutations = dom.rebuild();
         renderer.apply(mutations);
-        let (sender, mut receiver) = futures::channel::mpsc::unbounded::<MainEvent>();
         if let NativeWidget::Window(window) = &renderer.widgets.gtk[renderer.roots[&1]] {
-            window.connect_default_height_notify(move |_window| {
+            window.connect_default_height_notify(clone!(@strong sender => move |_window| {
                 sender.unbounded_send(MainEvent::Resize).unwrap();
-            });
+            }));
+            window.connect_default_width_notify(clone!(@strong sender => move |_window| {
+                sender.unbounded_send(MainEvent::Resize).unwrap();
+            }));
         }
         let main_context = MainContext::default();
         main_context.spawn_local(clone!(@strong app => async move {
             loop {
                 match select!(
-                    _ = receiver.next() => MainEvent::Resize,
+                    evt = receiver.next() => evt.unwrap(),
                     _ = dom.wait_for_work().fuse() => MainEvent::Render,
                 ) {
                     MainEvent::Resize => {
                         renderer.recalculate_layout();
                     },
                     MainEvent::Render => {
-                        let mutations = dom.rebuild();
-                        renderer.apply(mutations);
+                        for edits in dom.work_with_deadline(|| false) {
+                            renderer.apply(edits);
+                        }
                         renderer.recalculate_layout();
-                    }
+                    },
+                    MainEvent::UserEvent(evt) => {
+                        dom.handle_message(SchedulerMsg::Event(evt));
+                    },
                 }
             }
         }));
