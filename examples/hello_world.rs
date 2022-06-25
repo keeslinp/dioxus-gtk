@@ -1,9 +1,9 @@
 use dioxus::prelude::*;
 use gtk_platform::{
+    components::{Text, View, Window},
     geometry::Size,
     launch,
     style::{AlignItems, Dimension, JustifyContent, Style},
-    Text, View, Window,
 };
 use snafu::Whatever;
 
