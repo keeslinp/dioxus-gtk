@@ -28,60 +28,12 @@ struct Renderer {
     app: Application,
 }
 
-pub use taffy::style::{AlignItems, JustifyContent};
-
-#[derive(Default)]
-pub struct LayoutProps {
-    pub justify_content: Option<JustifyContent>,
-    pub align_items: Option<AlignItems>,
-}
-
-impl LayoutProps {
-    fn apply_attrs<'a>(&self, f: &NodeFactory<'a>, attrs: &mut BumpVec<'a, Attribute<'a>>) {
-        if let Some(ref justify_content) = self.justify_content {
-            // TODO: Proper serializing
-            attrs.push(f.attr(
-                "justify_content",
-                format_args!(
-                    "{}",
-                    match justify_content {
-                        JustifyContent::FlexStart => "flex_start",
-                        JustifyContent::FlexEnd => "flex_end",
-                        JustifyContent::Center => "center",
-                        JustifyContent::SpaceBetween => "space_between",
-                        JustifyContent::SpaceAround => "space_around",
-                        JustifyContent::SpaceEvenly => "space_evenly",
-                    }
-                ),
-                None,
-                false,
-            ));
-        }
-        if let Some(ref align_items) = self.align_items {
-            // TODO: Proper serializing
-            attrs.push(f.attr(
-                "align_items",
-                format_args!(
-                    "{}",
-                    match align_items {
-                        AlignItems::FlexStart => "flex_start",
-                        AlignItems::FlexEnd => "flex_end",
-                        AlignItems::Center => "center",
-                        AlignItems::Baseline => "baseline",
-                        AlignItems::Stretch => "stretch",
-                    }
-                ),
-                None,
-                false,
-            ));
-        }
-    }
-}
+pub use taffy::*;
 
 #[derive(Props)]
 pub struct ViewProps<'a> {
     children: Element<'a>,
-    layout: Option<LayoutProps>,
+    layout: Option<Style>,
 }
 
 enum NativeWidget {
@@ -108,7 +60,12 @@ pub fn View<'a>(cx: Scope<'a, ViewProps<'a>>) -> Element {
         }
         let mut attrs = BumpVec::new_in(f.bump());
         if let Some(ref layout) = cx.props.layout {
-            layout.apply_attrs(&f, &mut attrs);
+            attrs.push(f.attr(
+                "layout",
+                format_args!("{}", serde_json::to_string(layout).unwrap()),
+                None,
+                false,
+            ));
         }
         f.raw_element(
             "gtk_box",
@@ -136,7 +93,7 @@ pub fn Text<'a>(cx: Scope<'a, TextProps<'a>>) -> Element {
 pub struct WindowProps<'a> {
     title: &'a str,
     children: Element<'a>,
-    layout: Option<LayoutProps>,
+    layout: Option<Style>,
 }
 
 pub fn Window<'a>(cx: Scope<'a, WindowProps<'a>>) -> Element {
@@ -148,7 +105,12 @@ pub fn Window<'a>(cx: Scope<'a, WindowProps<'a>>) -> Element {
         let mut attrs = dioxus::core::exports::bumpalo::collections::Vec::new_in(f.bump());
         attrs.push(f.attr("title", format_args!("{}", cx.props.title), None, false));
         if let Some(ref layout) = cx.props.layout {
-            layout.apply_attrs(&f, &mut attrs);
+            attrs.push(f.attr(
+                "layout",
+                format_args!("{}", serde_json::to_string(layout).unwrap()),
+                None,
+                false,
+            ));
         }
         f.raw_element(
             "gtk_window",
@@ -284,58 +246,11 @@ impl Renderer {
                 } => {
                     let key = self.roots[&root];
                     match (&self.widgets.gtk[key], self.widgets.taffy.get(key), field) {
-                        (_, Some(taffy_node), "justify_content") => {
-                            let current_style = self
-                                .taffy
-                                .style(taffy_node.clone())
-                                .cloned()
-                                .unwrap_or_default();
+                        (_, Some(taffy_node), "layout") => {
+                            let layout = serde_json::from_str(value).unwrap();
+                            layout;
                             self.taffy
-                                .set_style(
-                                    *taffy_node,
-                                    Style {
-                                        justify_content: match value {
-                                            "flex_start" => JustifyContent::FlexStart,
-                                            "flex_end" => JustifyContent::FlexEnd,
-                                            "center" => JustifyContent::Center,
-                                            "space_between" => JustifyContent::SpaceBetween,
-                                            "space_around" => JustifyContent::SpaceAround,
-                                            "space_evenly" => JustifyContent::SpaceEvenly,
-                                            val => {
-                                                todo!(
-                                                    "Have not implemented justify_content {}",
-                                                    val
-                                                )
-                                            }
-                                        },
-                                        ..current_style
-                                    },
-                                )
-                                .expect("failed to apply justify_content style");
-                        }
-                        (_, Some(taffy_node), "align_items") => {
-                            let current_style = self
-                                .taffy
-                                .style(taffy_node.clone())
-                                .cloned()
-                                .unwrap_or_default();
-                            self.taffy
-                                .set_style(
-                                    *taffy_node,
-                                    Style {
-                                        align_items: match value {
-                                            "flex_start" => AlignItems::FlexStart,
-                                            "flex_end" => AlignItems::FlexEnd,
-                                            "center" => AlignItems::Center,
-                                            "baseline" => AlignItems::Baseline,
-                                            "stretch" => AlignItems::Stretch,
-                                            val => {
-                                                todo!("Have not implemented align_items {}", val)
-                                            }
-                                        },
-                                        ..current_style
-                                    },
-                                )
+                                .set_style(*taffy_node, layout)
                                 .expect("failed to apply justify_content style");
                         }
                         (NativeWidget::Text(ref widget), _, "text") => {

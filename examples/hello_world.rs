@@ -1,18 +1,30 @@
 use dioxus::prelude::*;
-use gtk_platform::{launch, AlignItems, JustifyContent, LayoutProps, Text, View, Window};
+use gtk_platform::{
+    geometry::Size,
+    launch,
+    style::{AlignItems, Dimension, JustifyContent, Style},
+    Text, View, Window,
+};
 use snafu::Whatever;
 
 fn app(cx: Scope) -> Element {
     cx.render(rsx!(Window {
         title: "Hello World",
-        layout: LayoutProps {
-            justify_content: Some(JustifyContent::Center),
+        layout: Style {
+            size: Size {
+                width: Dimension::Percent(1.),
+                height: Dimension::Percent(1.),
+            },
             ..Default::default()
         }
         View {
-            layout: LayoutProps {
-                justify_content: Some(JustifyContent::Center),
-                align_items: Some(AlignItems::Center),
+            layout: Style {
+                size: Size {
+                    width: Dimension::Percent(1.),
+                    height: Dimension::Percent(1.),
+                },
+                justify_content: JustifyContent::SpaceAround,
+                align_items: AlignItems::Center,
                 ..Default::default()
             }
             Text {
