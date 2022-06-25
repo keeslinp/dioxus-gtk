@@ -259,8 +259,8 @@ impl Renderer {
                                 .new_leaf(
                                     Default::default(),
                                     Boxed(Box::new(move |_| Size {
-                                        width: button.width() as f32,
-                                        height: button.height() as f32,
+                                        width: button.allocated_width() as f32,
+                                        height: button.allocated_height() as f32,
                                     })),
                                 )
                                 .unwrap();
@@ -277,8 +277,8 @@ impl Renderer {
                                 .new_leaf(
                                     Default::default(),
                                     Boxed(Box::new(move |_| Size {
-                                        width: label.width() as f32,
-                                        height: label.height() as f32,
+                                        width: label.allocated_width() as f32,
+                                        height: label.allocated_height() as f32,
                                     })),
                                 )
                                 .unwrap();
@@ -418,12 +418,6 @@ impl Renderer {
                     layout.location.y as f64,
                 );
             }
-            gtk_node
-                .upcast()
-                .set_width_request(layout.size.width as i32);
-            gtk_node
-                .upcast()
-                .set_height_request(layout.size.height as i32);
         }
     }
 }
