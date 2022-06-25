@@ -5,7 +5,7 @@ use dioxus::prelude::Props;
 use dioxus_core::{exports::bumpalo, prelude::*, IntoVNode};
 use taffy::style::Style;
 
-use crate::events::{PressData, PressEvent};
+use crate::events::{PressData, PressEvent, TextChangeData, TextChangeEvent};
 
 #[derive(Props)]
 pub struct ViewProps<'a> {
@@ -134,6 +134,61 @@ pub fn Window<'a>(cx: Scope<'a, WindowProps<'a>>) -> Element {
             &[],
             attrs.into_bump_slice(),
             children.into_bump_slice(),
+            None,
+        )
+    }))
+}
+
+#[derive(Props)]
+pub struct TextFieldProps<'a> {
+    place_holder: Option<String>,
+    layout: Option<Style>,
+    value: String,
+    on_text_change: EventHandler<'a, TextChangeEvent>,
+}
+pub fn TextField<'a>(cx: Scope<'a, TextFieldProps<'a>>) -> Element {
+    cx.render(LazyNodes::new(move |f| {
+        let bump = &f.bump();
+        let mut attrs = BumpVec::new_in(bump);
+        if let Some(ref place_holder) = cx.props.place_holder {
+            attrs.push(f.attr(
+                "place_holder",
+                format_args!("{}", place_holder),
+                None,
+                false,
+            ));
+        }
+        if let Some(ref layout) = cx.props.layout {
+            attrs.push(f.attr(
+                "layout",
+                format_args!("{}", serde_json::to_string(layout).unwrap()),
+                None,
+                false,
+            ));
+        }
+
+        attrs.push(f.attr("value", format_args!("{}", cx.props.value), None, false));
+        let mut listeners = BumpVec::new_in(bump);
+
+        use dioxus_core::AnyEvent;
+        // we can't allocate unsized in bumpalo's box, so we need to craft the box manually
+        // safety: this is essentially the same as calling Box::new() but manually
+        // The box is attached to the lifetime of the bumpalo allocator
+        let cb: &mut dyn FnMut(AnyEvent) = bump.alloc(move |evt: AnyEvent| {
+            let event = evt.downcast::<TextChangeData>().unwrap();
+            cx.props.on_text_change.call(event);
+        });
+
+        let callback: BumpBox<dyn FnMut(AnyEvent) + 'a> = unsafe { BumpBox::from_raw(cb) };
+
+        let handler = bump.alloc(std::cell::RefCell::new(Some(callback)));
+        listeners.push(f.listener("text_change", handler));
+        f.raw_element(
+            "gtk_text_field",
+            None,
+            listeners.into_bump_slice(),
+            attrs.into_bump_slice(),
+            &[],
             None,
         )
     }))

@@ -30,6 +30,7 @@ pub enum NativeWidget {
     Text(Label),
     Window(ApplicationWindow),
     Button(gtk::Button),
+    TextField(gtk::Entry),
 }
 
 impl NativeWidget {
@@ -39,6 +40,7 @@ impl NativeWidget {
             NativeWidget::Text(widget) => widget.clone().upcast::<Widget>(),
             NativeWidget::Window(widget) => widget.clone().upcast::<Widget>(),
             NativeWidget::Button(widget) => widget.clone().upcast::<Widget>(),
+            NativeWidget::TextField(widget) => widget.clone().upcast::<Widget>(),
         }
     }
 }
@@ -117,6 +119,26 @@ impl Renderer {
                             self.widgets.taffy.insert(key, taffy_node);
                             self.taffy_nodes.insert(taffy_node, key);
                         }
+                        "gtk_text_field" => {
+                            let text_field =
+                                gtk::Entry::builder().valign(gtk::Align::Start).build();
+                            text_field.set_width_chars(50);
+                            self.widgets
+                                .gtk
+                                .insert(key, NativeWidget::TextField(text_field.clone()));
+                            let taffy_node = self
+                                .taffy
+                                .new_leaf(
+                                    Default::default(),
+                                    Boxed(Box::new(move |_| Size {
+                                        width: text_field.allocated_width() as f32,
+                                        height: text_field.allocated_height() as f32,
+                                    })),
+                                )
+                                .unwrap();
+                            self.widgets.taffy.insert(key, taffy_node);
+                            self.taffy_nodes.insert(taffy_node, key);
+                        }
                         "gtk_label" => {
                             let label = Label::builder().valign(gtk::Align::Start).build();
                             self.widgets
@@ -187,7 +209,23 @@ impl Renderer {
                                     .unwrap();
                             });
                         }
-                        _ => unimplemented!(),
+                        (NativeWidget::TextField(widget), "text_change") => {
+                            let sender = self.sender.clone();
+                            widget.connect_text_notify(move |field| {
+                                sender
+                                    .unbounded_send(MainEvent::UserEvent(UserEvent {
+                                        scope_id: Some(scope),
+                                        priority: EventPriority::High,
+                                        element: Some(ElementId(root as usize)),
+                                        name: event_name,
+                                        data: Arc::new(events::TextChangeData {
+                                            value: field.text().into(),
+                                        }),
+                                    }))
+                                    .unwrap();
+                            });
+                        }
+                        (_, evt) => todo!("Event not implemented for that component: {}", evt),
                     }
                 }
                 dioxus_core::DomEdit::RemoveEventListener { .. } => todo!(),
@@ -213,6 +251,14 @@ impl Renderer {
                         (NativeWidget::Button(widget), Some(taffy_node), "label") => {
                             widget.set_label(value);
                             self.taffy.mark_dirty(*taffy_node).unwrap();
+                        }
+                        (NativeWidget::TextField(widget), _, "place_holder") => {
+                            widget.set_placeholder_text(Some(value));
+                        }
+                        (NativeWidget::TextField(widget), _, "value") => {
+                            if value != widget.text().as_str() {
+                                widget.set_text(value);
+                            }
                         }
                         _ => todo!(),
                     };
