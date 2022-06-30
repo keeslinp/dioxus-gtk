@@ -61,11 +61,13 @@ impl Renderer {
                     );
                     for child_root in stack.drain(stack.len() - many as usize..) {
                         let child_key = self.roots[&child_root];
-                        let child_widget = &self.widgets.gtk[child_key];
-                        let child_taffy = self.widgets.taffy[child_key];
-                        layout_root.put(&child_widget.upcast(), 0., 0.);
                         self.widgets.layout_parent.insert(child_key, target_key);
-                        self.taffy.add_child(target_taffy, child_taffy).unwrap();
+                        if let Some(child_widget) = self.widgets.gtk.get(child_key) {
+                            layout_root.put(&child_widget.upcast(), 0., 0.);
+                        }
+                        if let Some(child_taffy) = self.widgets.taffy.get(child_key) {
+                            self.taffy.add_child(target_taffy, *child_taffy).unwrap();
+                        }
                     }
                 }
                 dioxus_core::DomEdit::AppendChildren { many } if many == 1 && stack.len() == 1 => {
@@ -79,7 +81,43 @@ impl Renderer {
                 dioxus_core::DomEdit::AppendChildren { .. } => {
                     unreachable!("I don't think this possible")
                 }
-                dioxus_core::DomEdit::ReplaceWith { .. } => todo!(),
+                dioxus_core::DomEdit::ReplaceWith { root, m } => {
+                    let replace_key = self.roots[&root];
+                    let parent = self.widgets.layout_parent.remove(replace_key);
+                    if let (Some(widget), Some(parent_widget)) = (
+                        self.widgets.gtk.remove(replace_key),
+                        parent.and_then(|key| self.widgets.layout_root.get(key)),
+                    ) {
+                        parent_widget.remove(&widget.upcast());
+                    }
+                    if let (Some(child_node), Some(parent_node)) = (
+                        self.widgets.taffy.remove(replace_key),
+                        parent.and_then(|key| self.widgets.taffy.get(key)),
+                    ) {
+                        self.taffy.remove_child(*parent_node, child_node).unwrap();
+                    }
+                    self.widgets.main.remove(replace_key);
+                    self.widgets.layout_root.remove(replace_key);
+                    for child_root in stack.drain(stack.len() - m as usize..) {
+                        let child_key = self.roots[&child_root];
+                        if let Some(parent) = parent {
+                            self.widgets.layout_parent.insert(child_key, parent);
+                            if let (Some(parent_node), Some(child_node)) = (
+                                self.widgets.taffy.get(parent),
+                                self.widgets.taffy.get(child_key),
+                            ) {
+                                self.taffy.add_child(*parent_node, *child_node).unwrap();
+                            }
+
+                            if let (Some(parent_layout), Some(child_widget)) = (
+                                self.widgets.layout_root.get(parent),
+                                self.widgets.gtk.get(child_key),
+                            ) {
+                                parent_layout.put(&child_widget.upcast(), 0., 0.);
+                            }
+                        }
+                    }
+                }
                 dioxus_core::DomEdit::InsertAfter { .. } => todo!(),
                 dioxus_core::DomEdit::InsertBefore { .. } => todo!(),
                 dioxus_core::DomEdit::Remove { .. } => todo!(),
@@ -187,7 +225,11 @@ impl Renderer {
                     stack.push(root);
                 }
                 dioxus_core::DomEdit::CreateElementNs { .. } => todo!(),
-                dioxus_core::DomEdit::CreatePlaceholder { .. } => todo!(),
+                dioxus_core::DomEdit::CreatePlaceholder { root } => {
+                    let key = self.widgets.main.insert(());
+                    self.roots.insert(root, key);
+                    stack.push(root);
+                }
                 dioxus_core::DomEdit::NewEventListener {
                     event_name,
                     scope,
